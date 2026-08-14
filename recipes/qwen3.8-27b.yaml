@@ -1,0 +1,66 @@
+# Recipe: Qwen/Qwen3.8-27B
+# Qwen/Qwen3.8-27B model as dense BF16
+
+recipe_version: "1"
+name: Qwen3.8-27B
+description: vLLM serving Qwen3.8-27B dense hybrid-attention (BF16)
+
+# HuggingFace model to download (optional, for --download-model)
+model: Qwen/Qwen3.8-27B
+
+# Container image to use
+container: vllm-node
+
+mods:
+  - mods/fix-qwen3.6-chat-template
+
+# Default settings (can be overridden via CLI)
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 1
+  # 0.55 of 128 GB unified memory — tested value: ~123 GB system-wide with no swap on one DGX Spark (GB10)
+  gpu_memory_utilization: 0.55
+  max_model_len: 262144
+  max_num_batched_tokens: 16384
+  # Single-user box: cap concurrency to keep batch-1 decode latency
+  max_num_seqs: 4
+
+# Environment variables
+env:
+  {
+    "HF_HOME": "/root/.cache/huggingface",
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_VERSION": "5.8.0",
+  }
+
+# Sampling parameters (from Qwen docs Best Practices, also baked into generation_config.json)
+# vLLM will auto-pick up temperature=1.0, top_p=0.95, top_k=20 from the model's generation_config.json.
+# This produces the informational warning on startup — it is correct behavior (not an error).
+#
+# Thinking Mode (default):  temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0
+# Instruct Mode (no think): temperature=0.7, top_p=0.80, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0
+
+# vLLM serve command — BF16 with MTP speculative decoding
+command: |
+  vllm serve Qwen/Qwen3.8-27B \
+    --served-model-name Qwen3.8-27B \
+    --host {host} \
+    --port {port} \
+    --max-model-len {max_model_len} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --kv-cache-dtype fp8 \
+    --reasoning-parser qwen3 \
+    --enable-auto-tool-choice \
+    --tool-call-parser qwen3_coder \
+    --speculative-config '{{"method":"mtp","num_speculative_tokens":5}}' \
+    --max-num-seqs {max_num_seqs} \
+    --enable-chunked-prefill \
+    --enable-prefix-caching \
+    --load-format fastsafetensors \
+    --attention-backend flashinfer \
+    --trust-remote-code \
+    --mm-encoder-tp-mode data \
+    -tp {tensor_parallel} \
+    --distributed-executor-backend ray
