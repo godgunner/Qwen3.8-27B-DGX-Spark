@@ -42,7 +42,11 @@ docker run -d --name qwen38-27b \
     --mm-encoder-tp-mode data \
     -tp 1
 
+# Auto-prewarm (backgrounded) — compiles per-batch-shape Triton kernels
+# before the first real turn (see prewarm.sh header for details).
+( "$HERE/prewarm.sh" "$PORT" Qwen3.8-27B 4 ) >> /tmp/prewarm_qwen38-27b.log 2>&1 &
+
 echo "launched qwen38-27b (BF16) on :$PORT"
 echo "  logs:    docker logs -f qwen38-27b"
-echo "  prewarm: $HERE/prewarm.sh $PORT Qwen3.8-27B 4"
+echo "  prewarm: running in background — see /tmp/prewarm_qwen38-27b.log"
 echo "  verify:  $HERE/verify.sh $PORT Qwen3.8-27B"

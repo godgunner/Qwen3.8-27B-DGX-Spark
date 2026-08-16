@@ -42,7 +42,12 @@ docker run -d --name qwen38-27b \
     --mm-encoder-tp-mode data \
     -tp 1
 
+# Auto-prewarm (backgrounded): waits for /health, then fires 1,2,3,4
+# concurrent tiny requests so the per-batch-shape Triton kernels compile
+# BEFORE the first real turn (fixes the first-request 1-3 min JIT stall).
+( "$HERE/prewarm.sh" "$PORT" Qwen3.8-27B-NVFP4 4 ) >> /tmp/prewarm_qwen38-27b.log 2>&1 &
+
 echo "launched qwen38-27b (NVFP4) on :$PORT"
 echo "  logs:    docker logs -f qwen38-27b"
-echo "  prewarm: $HERE/prewarm.sh $PORT Qwen3.8-27B-NVFP4 4   # compiles batch kernels up front"
+echo "  prewarm: running in background — see /tmp/prewarm_qwen38-27b.log"
 echo "  verify:  $HERE/verify.sh $PORT Qwen3.8-27B-NVFP4"

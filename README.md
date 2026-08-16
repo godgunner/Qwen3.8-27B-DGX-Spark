@@ -23,7 +23,8 @@ is marked **NOT TESTED** and updated as we measure it.
 | NVFP4 single-request decode (util 0.75, K3) | ✅ tested — **~20–29 tok/s**, mean MTP acceptance 3.3–4.0 ([`evidence/`](./evidence/)) |
 | NVFP4 3-concurrent decode (util 0.75, K3) | ✅ tested — **~15–32 tok/s aggregate** after warmup ([`evidence/`](./evidence/)) |
 | `gpu_memory_utilization` no-swap point (NVFP4) | ✅ tested — **0.75 ≈ 123 GB / 128 GB, no swap** |
-| JIT warmup stall on first concurrent turn | ✅ observed + mitigated — see [Concurrency & the JIT stall](#concurrency--the-jit-warmup-stall) |
+| JIT warmup stall on first turn | ✅ observed + mitigated — inline prewarm built into all recipes — see [Concurrency & the JIT stall](#concurrency--the-jit-warmup-stall) |
+| NVFP4 single-stream steady decode (agentic, K3) | ✅ tested — **~12–15 tok/s**, mean MTP acceptance 2.2–3.5, KV 5–7% |
 | FP8 single-request tok/s at K5 | **NOT TESTED** — pending |
 | FP8 lane end-to-end | **NOT TESTED** — pending |
 | Prefix-cache hit rate in production | ✅ observed ~80% (BF16 K8), ~35–43% (NVFP4 K3 multi-chat) |
@@ -112,10 +113,15 @@ this — they stop appearing once the shapes are compiled.
 
 **Fixes, in order of effect:**
 
-1. **`./scripts/prewarm.sh 8000 Qwen3.8-27B-NVFP4 4`** — fires 1, 2, 3, 4
-   tiny concurrent requests once `/health` is up, forcing each batch shape
-   to compile before real traffic. Run it right after launch (or add it to
-   your startup). The first *real* concurrent turn is then fast.
+1. **Inline prewarm — now built into every recipe.** Each `recipes/*.yaml`
+   `command` block launches a backgrounded prewarm subshell *alongside* the
+   vLLM server: it waits for `/health`, then fires 1, 2, 3, 4 concurrent
+   tiny non-thinking requests (`/tmp/prewarm_<lane>.log` inside the
+   container). So launching a recipe via `run-recipe.py` is self-warming —
+   no extra step. The standalone `scripts/vllm-*.sh` launchers do the same
+   thing automatically via `scripts/prewarm.sh`. Run
+   **`./scripts/prewarm.sh 8000 <model> 4`** manually if you launch without
+   either mechanism.
 2. **Mount `~/.triton` (and `~/.cache/vllm`, `~/.cache/flashinfer`)** so the
    compiled kernels and torch.compile artifacts survive container restarts.
    All three standalone scripts mount these; the `run-recipe.py` launcher
@@ -123,6 +129,17 @@ this — they stop appearing once the shapes are compiled.
    warm, only a *new* batch width you've never hit will compile.
 3. **K3 instead of K5** — fewer draft forwards per step, so even a slow
    compile step blocks less. (See the speculative-config row above.)
+
+**Measured (2026-08-16, NVFP4, vLLM 0.27.2rc1.dev126, K3, util 0.75):**
+without the inline prewarm, a single Copilot chat's first turn hit the stall
+exactly as predicted — `POST /v1/messages 200` at 12:31:45, then
+`precopy_mamba_align_fused_kernel` / `eagle_*` / `expand_kernel` JIT warnings
+through 12:33:35, and the 10 s engine samples read **10.7 → 13.4 → 19.4 →
+15.8 tok/s** only after the last `_topk_topp`-family kernel compiled. Steady
+single-stream decode settled at **~12–15 tok/s, mean MTP acceptance 2.2–3.5,
+KV 5–7%, prefix-cache hit 47–64%** for agentic traffic. (Note the 404s at
+12:31:45: the client had `unsloth/Qwen3.6-27B-NVFP4` selected — a model-name
+mismatch on the client side, not a server fault.)
 
 **Not a bug, not a concurrency limit:** at util 0.75 the NVFP4 lane has
 **1.81M KV tokens** (6.92× at 262K) and `--max-num-seqs 4`, so 2–3 concurrent

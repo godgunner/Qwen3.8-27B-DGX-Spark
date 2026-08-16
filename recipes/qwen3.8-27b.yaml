@@ -42,8 +42,13 @@ env:
 # Instruct Mode (no think): temperature=0.7, top_p=0.80, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0
 
 # vLLM serve command — BF16 with MTP speculative decoding
+# NOTE: run-recipe.py str.format()s this command, so literal JSON braces are
+# doubled ({{ }}). Line 1 is an inline JIT prewarm (backgrounded) — same
+# rationale as the NVFP4 recipe: compiles per-batch-shape Triton kernels
+# before the first real turn (see the NVFP4 recipe for details).
 command: |
-  vllm serve Qwen/Qwen3.8-27B \
+  ( for i in $(seq 1 600); do curl -fsS http://127.0.0.1:{port}/health >/dev/null 2>&1 && break; sleep 2; done; for c in 1 2 3 4; do pids=(); for _ in $(seq 1 $c); do curl -fsS http://127.0.0.1:{port}/v1/chat/completions -H "Content-Type: application/json" -d '{{"model": "Qwen3.8-27B", "messages": [{{"role": "user", "content": "Reply with the single word: ok."}}], "max_tokens": 8, "temperature": 0.0, "chat_template_kwargs": {{"enable_thinking": false}}}}' >/dev/null 2>&1 & pids+=("$!"); done; wait || true; done; echo "[prewarm] done — batch-shape kernels compiled" ) >/tmp/prewarm_bf16.log 2>&1 &
+  vllm serve Qwen3.8-27B \
     --served-model-name Qwen3.8-27B \
     --host {host} \
     --port {port} \

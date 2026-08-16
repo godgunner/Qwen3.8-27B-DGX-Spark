@@ -1,9 +1,9 @@
 # Recipe: Qwen/Qwen3.8-27B-FP8
-# Qwen/Qwen3.8-27B model as dense FP8
-
+# FP8 quality lane — baseline config for the 1/2/3-concurrency test matrix.
+# (Former "ultra-long context concurrency" experiment preserved in comments below.)
 recipe_version: "1"
 name: Qwen3.8-27B-FP8
-description: vLLM serving Qwen3.8-27B dense hybrid-attention (FP8)
+description: vLLM serving Qwen3.8-27B dense hybrid-attention (FP8) with 262k context window
 
 # HuggingFace model to download (optional, for --download-model)
 model: Qwen/Qwen3.8-27B-FP8
@@ -14,7 +14,7 @@ container: vllm-node
 mods:
   - mods/fix-qwen3.6-chat-template
 
-# Default settings (can be overridden via CLI)
+# Baseline (matches BF16 lane shape so the 1/2/3-concurrency matrix is apples-to-apples)
 defaults:
   port: 8000
   host: 0.0.0.0
@@ -35,15 +35,13 @@ env:
     "TRANSFORMERS_VERSION": "5.8.0",
   }
 
-# Sampling parameters (from Qwen docs Best Practices, also baked into generation_config.json)
-# vLLM will auto-pick up temperature=1.0, top_p=0.95, top_k=20 from the model's generation_config.json.
-# This produces the informational warning on startup — it is correct behavior (not an error).
-#
-# Thinking Mode (default):  temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0
-# Instruct Mode (no think): temperature=0.7, top_p=0.80, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0
-
 # vLLM serve command — FP8 with MTP speculative decoding
+# NOTE: run-recipe.py str.format()s this command, so literal JSON braces are
+# doubled ({{ }}). Line 1 is an inline JIT prewarm (backgrounded) — same
+# rationale as the NVFP4 recipe: compiles per-batch-shape Triton kernels
+# before the first real turn (see the NVFP4 recipe for details).
 command: |
+  ( for i in $(seq 1 600); do curl -fsS http://127.0.0.1:{port}/health >/dev/null 2>&1 && break; sleep 2; done; for c in 1 2 3 4; do pids=(); for _ in $(seq 1 $c); do curl -fsS http://127.0.0.1:{port}/v1/chat/completions -H "Content-Type: application/json" -d '{{"model": "Qwen3.8-27B-FP8", "messages": [{{"role": "user", "content": "Reply with the single word: ok."}}], "max_tokens": 8, "temperature": 0.0, "chat_template_kwargs": {{"enable_thinking": false}}}}' >/dev/null 2>&1 & pids+=("$!"); done; wait || true; done; echo "[prewarm] done — batch-shape kernels compiled" ) >/tmp/prewarm_fp8.log 2>&1 &
   vllm serve Qwen/Qwen3.8-27B-FP8 \
     --served-model-name Qwen3.8-27B-FP8 \
     --host {host} \
@@ -65,3 +63,16 @@ command: |
     --mm-encoder-tp-mode data \
     -tp {tensor_parallel} \
     --distributed-executor-backend ray
+
+# ---------------------------------------------------------------------------
+# EXPERIMENT (saved 2026-08-16, tested as VS Code workhorse, NOT part of the
+# baseline matrix — see TESTING.md experiment E2):
+#   gpu_memory_utilization: 0.80
+#   max_num_batched_tokens: 2048   # strict chunked prefilling for large workspace prompts
+#   max_num_seqs: 2
+#   env += VLLM_ENGINE_ITERATION_TIMEOUT_S=60
+#   speculative-config: REMOVED (no MTP — "stripped of speculative decoding to
+#     prevent memory bus saturation")
+# To re-run: restore the four values above and delete the --speculative-config
+# line from the command.
+# ---------------------------------------------------------------------------
