@@ -15,6 +15,9 @@ docker run -d --name qwen38-27b \
   -e HF_HUB_OFFLINE=1 \
   -e TRANSFORMERS_VERSION=5.8.0 \
   -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
+  -v "$HOME/.triton:/root/.triton" \
+  -v "$HOME/.cache/vllm:/root/.cache/vllm" \
+  -v "$HOME/.cache/flashinfer:/root/.cache/flashinfer" \
   -v "$MODS/fix-qwen3.6-chat-template:/workspace/mods/fix-qwen3.6-chat-template:ro" \
   "$IMAGE" \
   vllm serve Qwen/Qwen3.8-27B-FP8 \
@@ -39,4 +42,5 @@ docker run -d --name qwen38-27b \
 
 echo "launched qwen38-27b (FP8) on :$PORT"
 echo "  logs:    docker logs -f qwen38-27b"
+echo "  prewarm: $HERE/prewarm.sh $PORT Qwen3.8-27B-FP8 4"
 echo "  verify:  $HERE/verify.sh $PORT Qwen3.8-27B-FP8"
